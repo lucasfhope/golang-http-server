@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"net"
 	"os"
@@ -56,13 +58,13 @@ func handleConnection(conn net.Conn) {
 	}
 	method := requestArray[0]
 	target := requestArray[1]
-	fmt.Println(fmt.Sprintf("Received %s request for target %s", method, target))
+	fmt.Printf("Received %s request for target %s\n", method, target)
 
 	headers := make(map[string]string)
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Error reading headers:", err.Error())
+			fmt.Print("Error reading headers\n", err.Error(), "\n")
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 			return
 		}
@@ -113,7 +115,7 @@ func handleGetRequest(conn net.Conn, target string, headers map[string]string, b
 	if target == defaultTarget {
 		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 	} else if strings.HasPrefix(target, echoTarget) {
-		getEcho(conn, target)
+		getEcho(conn, target, headers)
 	} else if target == userAgentTarget {
 		getUserAgent(conn, headers)
 	} else if strings.HasPrefix(target, filesTarget) {
@@ -135,10 +137,26 @@ func handlePostRequest(conn net.Conn, target string, headers map[string]string, 
 // GET Request Functions  //
 ////////////////////////////
 
-func getEcho(conn net.Conn, target string) {
+func getEcho(conn net.Conn, target string, headers map[string]string) {
 	echoMessage := strings.TrimSpace(strings.TrimPrefix(target, echoTarget)) + "\n"
-	response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(echoMessage), echoMessage)
+	contentEncoding, encodedData, err := getEncodingData(headers, echoMessage)
+	if err != nil {
+		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
+		return
+	}
+	var responseBody []byte
+	if encodedData != nil {
+		responseBody = encodedData
+	} else {
+		responseBody = []byte(echoMessage)
+	}
+	response := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\n%sContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n",
+		contentEncoding,
+		len(responseBody),
+	)
 	conn.Write([]byte(response))
+	conn.Write(responseBody)
 }
 
 func getUserAgent(conn net.Conn, headers map[string]string) {
@@ -205,4 +223,42 @@ func postFile(conn net.Conn, target string, body []byte) {
 
 	fmt.Println("File created successfully:", filePath)
 	conn.Write([]byte("HTTP/1.1 201 Created\r\n\r\n"))
+}
+
+//////////////////////
+// gzip Encoding  ////
+//////////////////////
+
+func getEncodingData(headers map[string]string, text string) (string, []byte, error) {
+	value, exists := headers["Accept-Encoding"]
+	if !exists {
+		return "", nil, nil
+	}
+	for _, encoding := range strings.Split(value, ",") {
+		if strings.Contains(strings.TrimSpace(encoding), "gzip") {
+			encodedText, err := gzipEncode(text)
+			if err != nil {
+				fmt.Print("Error gzip encoding text\n", err.Error(), "\n")
+				return "", nil, err
+			}
+			return "Content-Encoding: gzip\r\n", encodedText, nil
+		}
+	}
+	return "", nil, nil
+}
+
+func gzipEncode(data string) ([]byte, error) {
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	defer writer.Close()
+
+	_, err := writer.Write([]byte(data))
+	if err != nil {
+		return nil, err
+	}
+	err = writer.Close()
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
