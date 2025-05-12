@@ -42,72 +42,90 @@ func main() {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
+	fmt.Printf("New connection from %s\n", conn.RemoteAddr())
 
-	reader := bufio.NewReader(conn)
-	request, err := reader.ReadString('\n')
-	if err != nil {
-		fmt.Println("Error reading request: ", err.Error())
-		return
-	}
-
-	requestArray := strings.Split(request, " ")
-	if len(requestArray) != 3 {
-		fmt.Println("Invalid request format")
-		conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-		return
-	}
-	method := requestArray[0]
-	target := requestArray[1]
-	fmt.Printf("Received %s request for target %s\n", method, target)
-
-	headers := make(map[string]string)
 	for {
-		line, err := reader.ReadString('\n')
+		reader := bufio.NewReader(conn)
+		request, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Print("Error reading headers\n", err.Error(), "\n")
+			if err.Error() == "EOF" {
+				fmt.Println("Client disconnected")
+				return
+			}
+			fmt.Println("Error reading request:", err.Error())
+			continue
+		}
+
+		requestArray := strings.Split(request, " ")
+		if len(requestArray) != 3 {
+			fmt.Println("Invalid request format")
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			continue
+		}
+		method := requestArray[0]
+		target := requestArray[1]
+		fmt.Printf("Received %s request for target %s\n", method, target)
+
+		headers := make(map[string]string)
+		var errorReadingHeaders bool
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				errorReadingHeaders = true
+				fmt.Print("Error reading header\n", err.Error(), "\n")
+				continue
+			}
+			line = strings.TrimSpace(line)
+
+			if line == "" {
+				break
+			}
+
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				headers[key] = value
+			}
+		}
+		if errorReadingHeaders {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			continue
+		}
+
+		body := []byte{}
+		contentLengthStr, hasBody := headers["Content-Length"]
+		if hasBody {
+			var contentLength int
+			_, err := fmt.Sscanf(contentLengthStr, "%d", &contentLength)
+			if err != nil {
+				fmt.Println("Invalid Content-Length:", contentLengthStr)
+				conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+				continue
+			}
+
+			body = make([]byte, contentLength)
+			_, err = reader.Read(body)
+			if err != nil {
+				fmt.Println("Error reading body:", err)
+				conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+				continue
+			}
+		}
+
+		if method == "GET" {
+			handleGetRequest(conn, target, headers, body)
+		} else if method == "POST" {
+			handlePostRequest(conn, target, headers, body)
+		} else {
+			conn.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\nAllow: GET, POST\r\n\r\n"))
+		}
+
+		connectionHeader, exists := headers["Connection"]
+		if exists && strings.ToLower(connectionHeader) == "close" {
+			fmt.Println("Connection: close received, closing connection")
 			return
 		}
-		line = strings.TrimSpace(line)
-
-		if line == "" {
-			break
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			headers[key] = value
-		}
-	}
-
-	body := []byte{}
-	contentLengthStr, hasBody := headers["Content-Length"]
-	if hasBody {
-		var contentLength int
-		_, err := fmt.Sscanf(contentLengthStr, "%d", &contentLength)
-		if err != nil {
-			fmt.Println("Invalid Content-Length:", contentLengthStr)
-			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-			return
-		}
-
-		body = make([]byte, contentLength)
-		_, err = reader.Read(body)
-		if err != nil {
-			fmt.Println("Error reading body:", err)
-			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-			return
-		}
-	}
-
-	if method == "GET" {
-		handleGetRequest(conn, target, headers, body)
-	} else if method == "POST" {
-		handlePostRequest(conn, target, headers, body)
-	} else {
-		conn.Write([]byte("HTTP/1.1 405 Method Not Allowed\r\nAllow: GET, POST\r\n\r\n"))
 	}
 }
 
