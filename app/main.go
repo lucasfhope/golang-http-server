@@ -59,7 +59,7 @@ func handleConnection(conn net.Conn) {
 		requestArray := strings.Split(request, " ")
 		if len(requestArray) != 3 {
 			fmt.Println("Invalid request format")
-			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 			continue
 		}
 		method := requestArray[0]
@@ -89,7 +89,7 @@ func handleConnection(conn net.Conn) {
 			}
 		}
 		if errorReadingHeaders {
-			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 			continue
 		}
 
@@ -100,16 +100,20 @@ func handleConnection(conn net.Conn) {
 			_, err := fmt.Sscanf(contentLengthStr, "%d", &contentLength)
 			if err != nil {
 				fmt.Println("Invalid Content-Length:", contentLengthStr)
-				conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+				conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 				continue
 			}
 
 			body = make([]byte, contentLength)
-			_, err = reader.Read(body)
-			if err != nil {
-				fmt.Println("Error reading body:", err)
-				conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
-				continue
+			totalRead := 0
+			for totalRead < contentLength {
+				n, err := reader.Read(body[totalRead:])
+				if err != nil {
+					fmt.Println("Error reading body:", err)
+					conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+					continue
+				}
+				totalRead += n
 			}
 		}
 
@@ -131,7 +135,7 @@ func handleConnection(conn net.Conn) {
 
 func handleGetRequest(conn net.Conn, target string, headers map[string]string, body []byte) {
 	if target == defaultTarget {
-		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))
 	} else if strings.HasPrefix(target, echoTarget) {
 		getEcho(conn, target, headers)
 	} else if target == userAgentTarget {
@@ -139,7 +143,7 @@ func handleGetRequest(conn net.Conn, target string, headers map[string]string, b
 	} else if strings.HasPrefix(target, filesTarget) {
 		getFile(conn, target)
 	} else {
-		conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"))
 	}
 }
 
@@ -147,7 +151,7 @@ func handlePostRequest(conn net.Conn, target string, headers map[string]string, 
 	if strings.HasPrefix(target, filesTarget) {
 		postFile(conn, target, body)
 	} else {
-		conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"))
 	}
 }
 
@@ -156,7 +160,7 @@ func handlePostRequest(conn net.Conn, target string, headers map[string]string, 
 ////////////////////////////
 
 func getEcho(conn net.Conn, target string, headers map[string]string) {
-	echoMessage := strings.TrimSpace(strings.TrimPrefix(target, echoTarget)) + "\n"
+	echoMessage := strings.TrimSpace(strings.TrimPrefix(target, echoTarget))
 	contentEncoding, encodedData, err := getEncodingData(headers, echoMessage)
 	if err != nil {
 		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
@@ -181,10 +185,10 @@ func getUserAgent(conn net.Conn, headers map[string]string) {
 	userAgent, exists := headers["User-Agent"]
 	if !exists {
 		fmt.Println("User-Agent header not found")
-		conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
-	userAgent = strings.TrimSpace(userAgent) + "\n"
+	userAgent = strings.TrimSpace(userAgent)
 	response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(userAgent), userAgent)
 	conn.Write([]byte(response))
 }
@@ -195,10 +199,9 @@ func getFile(conn net.Conn, target string) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		fmt.Print("Error reading file:\n", err.Error(), "\n")
-		conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
-	data = append(data, '\n')
 	response := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", len(data), data)
 	conn.Write([]byte(response))
 }
@@ -215,7 +218,7 @@ func postFile(conn net.Conn, target string, body []byte) {
 	err := os.MkdirAll(dirPath, 0700)
 	if err != nil {
 		fmt.Print("Error creating directory\n", err.Error(), "\n")
-		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
 
@@ -224,7 +227,7 @@ func postFile(conn net.Conn, target string, body []byte) {
 	file, err := os.Create(filePath)
 	if err != nil {
 		fmt.Print("Error creating file:\n", err.Error(), "\n")
-		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
 	defer file.Close()
@@ -235,12 +238,12 @@ func postFile(conn net.Conn, target string, body []byte) {
 	_, err = file.Write(body)
 	if err != nil {
 		fmt.Print("Error writing to file\n", err.Error(), "\n")
-		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"))
+		conn.Write([]byte("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
 
 	fmt.Println("File created successfully:", filePath)
-	conn.Write([]byte("HTTP/1.1 201 Created\r\n\r\n"))
+	conn.Write([]byte("HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"))
 }
 
 //////////////////////
